@@ -3,10 +3,12 @@ import SwiftUI
 extension TargetsEditor {
     final class StateModel: BaseStateModel<Provider> {
         @Injected() private var nightscout: NightscoutManager!
+        @Injected() private var tidepoolManager: TidepoolManager!
         @Injected() private var broadcaster: Broadcaster!
 
         @Published var items: [Item] = []
         @Published var initialItems: [Item] = []
+        @Published var therapyItems: [TherapySettingItem] = []
         @Published var shouldDisplaySaving: Bool = false
 
         let timeValues = stride(from: 0.0, to: 1.days.timeInterval, by: 30.minutes.timeInterval).map { $0 }
@@ -27,6 +29,25 @@ extension TargetsEditor {
         }
 
         private(set) var units: GlucoseUnits = .mgdL
+
+        // Convert items to TherapySettingItem format
+        func getTherapyItems() -> [TherapySettingItem] {
+            items.map { item in
+                TherapySettingItem(
+                    time: timeValues[item.timeIndex],
+                    value: rateValues[item.lowIndex]
+                )
+            }
+        }
+
+        // Update items from TherapySettingItem format
+        func updateFromTherapyItems(_ therapyItems: [TherapySettingItem]) {
+            items = therapyItems.map { therapyItem in
+                let timeIndex = timeValues.firstIndex(where: { abs($0 - therapyItem.time) < 1 }) ?? 0
+                let lowIndex = rateValues.firstIndex(of: therapyItem.value) ?? 0
+                return Item(lowIndex: lowIndex, highIndex: lowIndex, timeIndex: timeIndex)
+            }
+        }
 
         override func subscribe() {
             units = settingsManager.settings.units
@@ -92,6 +113,10 @@ extension TargetsEditor {
                         "\(DebuggingIdentifiers.failed) failed to upload targets to Nightscout: \(error)"
                     )
                 }
+            }
+
+            Task.detached(priority: .low) {
+                await self.tidepoolManager.uploadSettings()
             }
         }
 

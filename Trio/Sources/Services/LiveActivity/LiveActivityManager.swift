@@ -10,7 +10,8 @@ import UIKit
 
     /// Determines if the current activity needs to be recreated.
     ///
-    /// - Returns: `true` if the activity is dismissed, ended, stale, or has been active for more than 60 minutes; otherwise, `false`.
+    /// - Returns: `true` if the activity is dismissed, ended, stale, or has been active for more than 60 minutes; otherwise,
+    /// `false`.
     func needsRecreation() -> Bool {
         switch activity.activityState {
         case .dismissed,
@@ -35,6 +36,8 @@ final class LiveActivityData: ObservableObject {
     @Published var glucoseFromPersistence: [GlucoseData]?
     /// The current override data (if any).
     @Published var override: OverrideData?
+    /// The current temp target data (if any).
+    @Published var tempTarget: TempTargetData?
     /// The widget items displayed within the live activity.
     @Published var widgetItems: [LiveActivityAttributes.LiveActivityItem]?
 }
@@ -47,8 +50,7 @@ final class LiveActivityData: ObservableObject {
 ///
 /// Additionally, it supports a restart functionality (via `restartActivityFromLiveActivityIntent()`)
 /// via iOS shortcuts, similar to other iOS apps like xDrip4iOS or Sweet Dreams.
-@available(iOS 16.2, *)
-final class LiveActivityManager: Injectable, ObservableObject, SettingsObserver {
+@available(iOS 16.2, *) final class LiveActivityManager: Injectable, ObservableObject, SettingsObserver {
     @Injected() private var settingsManager: SettingsManager!
     @Injected() private var broadcaster: Broadcaster!
     @Injected() private var storage: FileStorage!
@@ -141,6 +143,10 @@ final class LiveActivityManager: Injectable, ObservableObject, SettingsObserver 
             Task { await self?.loadOverrides() }
         }.store(in: &subscriptions)
 
+        coreDataPublisher?.filteredByEntityName("TempTargetStored").sink { [weak self] _ in
+            Task { await self?.loadTempTarget() }
+        }.store(in: &subscriptions)
+
         coreDataPublisher?.filteredByEntityName("GlucoseStored").sink { [weak self] _ in
             Task { await self?.loadGlucose() }
         }.store(in: &subscriptions)
@@ -179,6 +185,15 @@ final class LiveActivityManager: Injectable, ObservableObject, SettingsObserver 
         }
     }
 
+    /// Fetches and maps temp target data and updates the live activity content state.
+    private func loadTempTarget() async {
+        do {
+            data.tempTarget = try await fetchAndMapTempTarget()
+        } catch {
+            debug(.default, "[LiveActivityManager] \(DebuggingIdentifiers.failed) failed to fetch and map temp target: \(error)")
+        }
+    }
+
     /// Handles changes to the live activity order.
     ///
     /// Loads widget items from user defaults and triggers an update to the live activity order.
@@ -203,6 +218,7 @@ final class LiveActivityManager: Injectable, ObservableObject, SettingsObserver 
         Task {
             await self.loadGlucose()
             await self.loadOverrides()
+            await self.loadTempTarget()
             await self.loadDetermination()
             self.loadWidgetItems()
         }
@@ -288,7 +304,26 @@ final class LiveActivityManager: Injectable, ObservableObject, SettingsObserver 
                             lowGlucose: settings.low,
                             target: data.determination?.target ?? 100 as Decimal,
                             glucoseColorScheme: settings.glucoseColorScheme.rawValue,
-                            detailedViewState: nil,
+                            useDetailedViewIOS: false,
+                            useDetailedViewWatchOS: false,
+                            detailedViewState: LiveActivityAttributes.ContentAdditionalState(
+                                chart: [],
+                                rotationDegrees: 0,
+                                cob: 0,
+                                iob: 0,
+                                tdd: 0,
+                                isOverrideActive: false,
+                                overrideName: "",
+                                overrideDate: Date.now,
+                                overrideDuration: 0,
+                                overrideTarget: 0,
+                                isTempTargetActive: false,
+                                tempTargetName: "",
+                                tempTargetDate: Date.now,
+                                tempTargetDuration: 0,
+                                tempTargetTarget: 0,
+                                widgetItems: []
+                            ),
                             isInitialState: true
                         ),
                     staleDate: Date.now.addingTimeInterval(60)
@@ -340,7 +375,8 @@ final class LiveActivityManager: Injectable, ObservableObject, SettingsObserver 
 
     /// Restarts the live activity from a Live Activity Intent.
     ///
-    /// This method mimics xdrip's `restartActivityFromLiveActivityIntent()` behavior by verifying that a valid content state exists,
+    /// This method mimics xdrip's `restartActivityFromLiveActivityIntent()` behavior by verifying that a valid content state
+    /// exists,
     /// ending the current live activity, and starting a new one using the current state.
     @MainActor func restartActivityFromLiveActivityIntent() async {
         await endActivity()
@@ -362,8 +398,7 @@ final class LiveActivityManager: Injectable, ObservableObject, SettingsObserver 
     }
 }
 
-@available(iOS 16.2, *)
-extension LiveActivityManager {
+@available(iOS 16.2, *) extension LiveActivityManager {
     @MainActor func pushCurrentContent() async {
         guard let glucose = data.glucoseFromPersistence, let bg = glucose.first else {
             debug(.default, "[LiveActivityManager] pushCurrentContent: no current glucose data available")
@@ -385,6 +420,7 @@ extension LiveActivityManager {
             determination: determination,
             iob: data.iob,
             override: data.override,
+            tempTarget: data.tempTarget,
             widgetItems: data.widgetItems
         )
 

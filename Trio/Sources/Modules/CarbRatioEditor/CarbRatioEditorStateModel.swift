@@ -3,8 +3,11 @@ import SwiftUI
 extension CarbRatioEditor {
     final class StateModel: BaseStateModel<Provider> {
         @Injected() private var nightscout: NightscoutManager!
+        @Injected() private var tidepoolManager: TidepoolManager!
+        @Injected() private var broadcaster: Broadcaster!
         @Published var items: [Item] = []
         @Published var initialItems: [Item] = []
+        @Published var therapyItems: [TherapySettingItem] = []
         @Published var shouldDisplaySaving: Bool = false
 
         let timeValues = stride(from: 0.0, to: 1.days.timeInterval, by: 30.minutes.timeInterval).map { $0 }
@@ -28,6 +31,25 @@ extension CarbRatioEditor {
             }
 
             return false
+        }
+
+        // Convert items to TherapySettingItem format
+        func getTherapyItems() -> [TherapySettingItem] {
+            items.map { item in
+                TherapySettingItem(
+                    time: timeValues[item.timeIndex],
+                    value: rateValues[item.rateIndex]
+                )
+            }
+        }
+
+        // Update items from TherapySettingItem format
+        func updateFromTherapyItems(_ therapyItems: [TherapySettingItem]) {
+            items = therapyItems.map { therapyItem in
+                let timeIndex = timeValues.firstIndex(where: { abs($0 - therapyItem.time) < 1 }) ?? 0
+                let rateIndex = rateValues.firstIndex(of: therapyItem.value) ?? 0
+                return Item(rateIndex: rateIndex, timeIndex: timeIndex)
+            }
         }
 
         override func subscribe() {
@@ -69,6 +91,13 @@ extension CarbRatioEditor {
             let profile = CarbRatios(units: .grams, schedule: schedule)
             provider.saveProfile(profile)
             initialItems = items.map { Item(rateIndex: $0.rateIndex, timeIndex: $0.timeIndex) }
+
+            DispatchQueue.main.async {
+                self.broadcaster.notify(CarbRatiosObserver.self, on: .main) {
+                    $0.carbRatiosDidChange(profile)
+                }
+            }
+
             Task.detached(priority: .low) {
                 do {
                     debug(.nightscout, "Attempting to upload CRs to Nightscout")
@@ -76,6 +105,10 @@ extension CarbRatioEditor {
                 } catch {
                     debug(.default, "Failed to upload CRs to Nightscout: \(error)")
                 }
+            }
+
+            Task.detached(priority: .low) {
+                await self.tidepoolManager.uploadSettings()
             }
         }
 

@@ -7,16 +7,16 @@ enum PumpConfig {
 
     enum PumpType: Equatable {
         case minimed
-        case omnipod
-        case omnipodBLE
+        case omni
         case dana
+        case medtrum
         case simulator
     }
 
     struct PumpInitialSettings {
-        let maxBolusUnits: Double
-        let maxBasalRateUnitsPerHour: Double
-        let basalSchedule: BasalRateSchedule
+        var maxBolusUnits: Double
+        var maxBasalRateUnitsPerHour: Double
+        var basalSchedule: BasalRateSchedule
 
         static let `default` = PumpInitialSettings(
             maxBolusUnits: 10,
